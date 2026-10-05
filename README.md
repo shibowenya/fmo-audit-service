@@ -32,7 +32,7 @@ FMO 4.0 把认证（技术：证书链可验证）与责任（治理：行为归
 ```bash
 sudo bash script/install.sh ./fmo-audit-service-linux-x64.tar.gz
 # 包已托管到服务器时也可直接给 URL：
-# sudo bash script/install.sh https://example.com/fas/fmo-audit-service-linux-x64.tar.gz
+# sudo bash script/install.sh https://xxxxxx.com/fas/fmo-audit-service-linux-x64.tar.gz
 ```
 
 自动完成：解压到 `/opt/fmo-fas/` → 创建专用低权限用户 → 注册 systemd 服务 `fmo-fas`（开机自启 + 崩溃自动拉起 + 沙箱加固）→ 立即启动。访问 `http://<服务器IP>:9527`。
