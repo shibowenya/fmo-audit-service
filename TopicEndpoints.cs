@@ -7,7 +7,7 @@ namespace EmqxMonitor;
 public static class TopicEndpoints
 {
     public static void MapTopicEndpoints(this WebApplication app, AppSettings settings, int port,
-        TopicIngestService topicIngest, EmqxClient emqx, Database db, CollectorService collector)
+        TopicIngestService topicIngest, EmqxClient emqx, Database db, CollectorService collector, WhitelistStore whitelist)
     {
         // POST /api/ingest — EMQX 规则引擎消息事件入口（token 校验）
         // 注意：必须同步 await 读 body——异步 Task.Run 读 Request.Body 在响应返回后不可读
@@ -57,7 +57,7 @@ public static class TopicEndpoints
                 if (!string.IsNullOrEmpty(topic) && !string.IsNullOrEmpty(clientid))
                 {
                     ingest.Ingest(topic, username, uid, clientid, bytes, DateTime.Now);
-                    await RunIdentityAuditAsync(raw, topic, username, uid, clientid, DateTime.Now, topicIngest, db, emqx, collector);
+                    await RunIdentityAuditAsync(raw, topic, username, uid, clientid, DateTime.Now, topicIngest, db, emqx, collector, whitelist);
                 }
             }
             catch (Exception ex)
@@ -215,7 +215,7 @@ public static class TopicEndpoints
 
     // 包头审计（身份控制）：解包 FMO/RAW 包头 → 比对连接身份 → KICK 自动拉黑 / WARN 仅记录 / FAIL 降级
     private static async Task RunIdentityAuditAsync(byte[]? raw, string? topic, string? connCallsign, string? connUid, string? clientid, DateTime now,
-    TopicIngestService topicIngest, Database db, EmqxClient emqx, CollectorService collector)
+    TopicIngestService topicIngest, Database db, EmqxClient emqx, CollectorService collector, WhitelistStore whitelist)
     {
         if (raw == null || raw.Length == 0) return;   // 无 payload（文本统计模式）不审计
         var parsed = FmoRawParser.Parse(raw);
@@ -231,6 +231,10 @@ public static class TopicEndpoints
             }
             return;
         }
+
+        // 白名单免审：连接身份呼号在白名单中 → 完全跳过身份比对（不产生 KICK/WARN，不自动拉黑）
+        // —— 白名单功能 © BG2GZK
+        if (whitelist.Contains(connCallsign)) return;
 
         var pktCallsign = parsed.Callsign.Trim().ToUpperInvariant();
         var pktUid = parsed.Uid.ToString();

@@ -123,6 +123,15 @@ public class Database
             );
             CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_packets(ts);
             CREATE INDEX IF NOT EXISTS idx_audit_verdict ON audit_packets(verdict, ts);
+
+            -- 白名单（免于身份审计）：呼号粒度，与拉黑粒度一致
+            CREATE TABLE IF NOT EXISTS whitelist (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                callsign   TEXT    NOT NULL UNIQUE,   -- 呼号（大写归一）
+                note       TEXT,                      -- 备注
+                operator   TEXT    NOT NULL,          -- 添加管理员
+                created_at TEXT    NOT NULL           -- 添加时间 'yyyy-MM-dd HH:mm:ss'
+            );
             """;
         cmd.ExecuteNonQuery();
 
@@ -813,6 +822,68 @@ public class Database
         }
     }
 
+    // ---------------- 白名单（免于身份审计） ----------------
+    // 白名单功能 © BG2GZK
+
+    /// <summary>添加白名单呼号（呼号大写归一，重复添加返回 false）</summary>
+    public bool AddWhitelist(string callsign, string? note, string operatorName, DateTime at)
+    {
+        callsign = callsign.Trim().ToUpperInvariant();
+        lock (_lock)
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO whitelist (callsign, note, operator, created_at)
+                VALUES ($c, $n, $o, $t)
+                ON CONFLICT(callsign) DO NOTHING
+                """;
+            cmd.Parameters.AddWithValue("$c", callsign);
+            cmd.Parameters.AddWithValue("$n", (object?)note ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$o", operatorName);
+            cmd.Parameters.AddWithValue("$t", at.ToString("yyyy-MM-dd HH:mm:ss"));
+            return cmd.ExecuteNonQuery() > 0;
+        }
+    }
+
+    /// <summary>移除白名单呼号，返回是否确有删除</summary>
+    public bool RemoveWhitelist(string callsign)
+    {
+        callsign = callsign.Trim().ToUpperInvariant();
+        lock (_lock)
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM whitelist WHERE callsign = $c";
+            cmd.Parameters.AddWithValue("$c", callsign);
+            return cmd.ExecuteNonQuery() > 0;
+        }
+    }
+
+    /// <summary>全部白名单（按添加时间倒序）</summary>
+    public List<WhitelistRow> QueryWhitelist()
+    {
+        lock (_lock)
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT callsign, note, operator, created_at FROM whitelist ORDER BY created_at DESC, id DESC";
+            var list = new List<WhitelistRow>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                list.Add(new WhitelistRow
+                {
+                    Callsign = r.GetString(0),
+                    Note = r.IsDBNull(1) ? null : r.GetString(1),
+                    Operator = r.GetString(2),
+                    CreatedAt = r.GetString(3),
+                });
+            }
+            return list;
+        }
+    }
+
     // ---------------- 包头审计（身份控制） ----------------
 
     /// <summary>写入一条包头审计事件（仅异常：KICK/WARN/FAIL；PASS 由 topic_stats 聚合）</summary>
@@ -962,7 +1033,7 @@ public class Database
         lock (_lock)
         {
             using var conn = Open();
-            foreach (var t in new[] { "minute_stats", "topic_stats", "health_snapshots", "settings", "admin_user", "blacklist_audit" })
+            foreach (var t in new[] { "minute_stats", "topic_stats", "health_snapshots", "settings", "admin_user", "blacklist_audit", "whitelist" })
             {
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = $"DELETE FROM {t}";
@@ -1116,6 +1187,15 @@ public class BlacklistHistoryRow
     public string Who { get; init; } = "";
     public string? Reason { get; init; }
     public string? Until { get; init; }
+    public string Operator { get; init; } = "";
+    public string CreatedAt { get; init; } = "";
+}
+
+/// <summary>白名单行（免于身份审计）—— 白名单功能 © BG2GZK</summary>
+public class WhitelistRow
+{
+    public string Callsign { get; init; } = "";
+    public string? Note { get; init; }
     public string Operator { get; init; } = "";
     public string CreatedAt { get; init; } = "";
 }

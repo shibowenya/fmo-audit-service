@@ -76,6 +76,8 @@ var auth = new AuthService(db);
 var health = new HostHealthCollector();
 var collector = new CollectorService(emqx, db, health, loggerFactory.CreateLogger<CollectorService>());
 var topicIngest = new TopicIngestService(db);
+// 白名单（免于身份审计）—— 白名单功能 © BG2GZK
+var whitelist = new WhitelistStore(db);
 // 身份控制开关默认启用（最高保护）；从持久化配置恢复
 topicIngest.IdentityControlEnabled = settings.IdentityControlEnabled;
 
@@ -97,6 +99,7 @@ builder.Services.AddSingleton(health);
 builder.Services.AddSingleton(collector);
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CollectorService>());
 builder.Services.AddSingleton(topicIngest);
+builder.Services.AddSingleton(whitelist);
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TopicIngestService>());
 builder.Services.AddSingleton<UpdateProgressTracker>();
 
@@ -362,7 +365,7 @@ app.MapGet("/api/export.csv", (string from, string to, string? order, Database d
 });
 
 // ---- 主题统计（规则引擎 Webhook）----
-app.MapTopicEndpoints(settings, port, topicIngest, emqx, db, collector);
+app.MapTopicEndpoints(settings, port, topicIngest, emqx, db, collector, whitelist);
 
 // ---- 兼容性自检 ----
 
@@ -413,7 +416,7 @@ app.MapGet("/api/online", () =>
 });
 
 // ---- 黑名单 API（拉黑/解封/当前生效/操作历史）----
-app.MapBlacklistEndpoints(emqx, db, collector, topicIngest, settings);
+app.MapBlacklistEndpoints(emqx, db, collector, topicIngest, settings, whitelist);
 
 // ---- 版本与更新（OTA）----
 app.MapUpdateEndpoints();
@@ -450,8 +453,9 @@ app.MapPost("/api/admin/reset", async () =>
     // 3) 清空采集器/接收器内存状态（计数器基线、聚合缓冲、计数归零）
     collector.ResetState();
     topicIngest.Reset();
-    // 4) 清空全部表
+    // 4) 清空全部表（含白名单）并失效白名单缓存（白名单功能 © BG2GZK）
     db.ClearAll();
+    whitelist.Invalidate();
     return Results.Json(new { ok = true });
 });
 
@@ -477,3 +481,5 @@ record TopicConfigRequest(bool Enable, string? Topic, string? WebhookUrl);
 record BlacklistBanRequest(string? Who, string? Reason, string? Until);
 record BlacklistUnbanRequest(string? Who);
 record IdentityControlRequest(bool Enabled);
+record WhitelistAddRequest(string? Callsign, string? Note);
+record WhitelistRemoveRequest(string? Callsign);

@@ -6,7 +6,7 @@ namespace EmqxMonitor;
 public static class BlacklistEndpoints
 {
     public static void MapBlacklistEndpoints(this WebApplication app, EmqxClient emqx, Database db,
-        CollectorService collector, TopicIngestService topicIngest, AppSettings settings)
+        CollectorService collector, TopicIngestService topicIngest, AppSettings settings, WhitelistStore whitelist)
     {
         // ---- 黑名单 API（拉黑/解封/当前生效/操作历史）----
         // 权威执行在 EMQX（banned API），本地 blacklist_audit 留痕；EMQX 操作失败不写流水。
@@ -107,6 +107,38 @@ public static class BlacklistEndpoints
             var rows = database.QueryAuditPackets(f, t, verdict, Math.Clamp(limit ?? 200, 1, 1000));
             var counts = database.CountAuditVerdicts(f, t);
             return Results.Json(new { ok = true, from = f, to = t, rows, counts });
+        });
+
+        // ---- 白名单 API（免于身份审计）—— 白名单功能 © BG2GZK ----
+
+        // GET /api/whitelist — 白名单列表（按添加时间倒序）
+        app.MapGet("/api/whitelist", (Database database) =>
+            Results.Json(new { ok = true, rows = database.QueryWhitelist() }));
+
+        // POST /api/whitelist — 添加白名单呼号（大写归一，重复添加幂等）
+        app.MapPost("/api/whitelist", (WhitelistAddRequest req, HttpContext ctx, Database database) =>
+        {
+            var cs = req.Callsign?.Trim() ?? "";
+            if (string.IsNullOrEmpty(cs))
+                return Results.Json(new { ok = false, error = "呼号不能为空" });
+            if (cs.Length > 12)
+                return Results.Json(new { ok = false, error = "呼号过长（包头呼号字段上限 12 字符）" });
+
+            var added = database.AddWhitelist(cs, req.Note?.Trim(), ctx.User.Identity?.Name ?? "?", DateTime.Now);
+            whitelist.Invalidate();
+            return Results.Json(new { ok = true, callsign = cs.ToUpperInvariant(), added });
+        });
+
+        // POST /api/whitelist/remove — 移除白名单呼号（移除后恢复身份审计）
+        app.MapPost("/api/whitelist/remove", (WhitelistRemoveRequest req, Database database) =>
+        {
+            var cs = req.Callsign?.Trim() ?? "";
+            if (string.IsNullOrEmpty(cs))
+                return Results.Json(new { ok = false, error = "呼号不能为空" });
+
+            var removed = database.RemoveWhitelist(cs);
+            whitelist.Invalidate();
+            return Results.Json(new { ok = true, removed });
         });
     }
 }

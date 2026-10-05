@@ -16,6 +16,7 @@ FMO 4.0 把认证（技术：证书链可验证）与责任（治理：行为归
 - **在线列表**：实时查看当前在线客户端（呼号/clientid/IP/连接时长/流量），60 秒刷新
 - **身份控制**（默认启用）：逐包解析 FMO/RAW 包头（64 字节，含 UID/呼号），比对**包头声明身份**与**连接身份**——不一致即伪造，**立即自动拉黑**（踢下线 + 禁连 + 留痕）
 - **黑名单**：拉黑/解封（永久或到期自动解除），操作留痕（谁、何时、原因）
+- **白名单**：呼号加入白名单后**完全免于身份审计**（不比对、不产生 KICK/WARN、不自动拉黑），适合中继台/网关等包头呼号与连接身份本就不一致的正当局；管理员手动拉黑不受白名单影响
 - **身份审计**：KICK（身份不符）/ WARN（未知身份）/ FAIL（非法包）事件留证，可过滤查询
 - **健康监控**：服务器资源（CPU/内存/磁盘/网络）+ EMQX 节点状态（连接数/消息速率/告警）
 - **OTA 升级**：页面一键检查更新并自动替换重启
@@ -24,23 +25,80 @@ FMO 4.0 把认证（技术：证书链可验证）与责任（治理：行为归
 
 ## 快速开始
 
-### Linux（推荐）
+> ⚠️ 本版为修改版（新增白名单功能）。官方 `bg5esn.com` 安装脚本安装的是**原版（无白名单）**，本版请使用下方自带安装脚本（`script/`），配合 `dist/` 下的发行包部署。
+
+### Linux（推荐一键安装）
 
 ```bash
-curl -fsSL https://bg5esn.com/share/fmo/fas-installer/install.sh | sudo bash
+sudo bash script/install.sh ./fmo-audit-service-linux-x64.tar.gz
+# 包已托管到服务器时也可直接给 URL：
+# sudo bash script/install.sh https://example.com/fas/fmo-audit-service-linux-x64.tar.gz
 ```
 
-安装到 `/opt/fmo-fas/`，注册 systemd 服务 `fmo-fas`（专用低权限用户运行，开机自启，OTA 更新自动重启）。
+自动完成：解压到 `/opt/fmo-fas/` → 创建专用低权限用户 → 注册 systemd 服务 `fmo-fas`（开机自启 + 崩溃自动拉起 + 沙箱加固）→ 立即启动。访问 `http://<服务器IP>:9527`。
 
-### Windows
+<details><summary>手动部署（不用脚本时展开）</summary>
 
-推荐使用官方安装脚本（自动下载最新版，注册计划任务开机自启）：
+1. 解压对应平台包到安装目录（以 linux-x64 为例，ARM/ARM64 换对应包名）：
+
+```bash
+sudo mkdir -p /opt/fmo-fas && cd /opt/fmo-fas
+sudo tar -xzf /path/to/fmo-audit-service-linux-x64.tar.gz
+sudo chmod +x fmo-audit-service
+```
+
+2. 创建低权限用户并注册 systemd 服务（开机自启，崩溃自动拉起）：
+
+```bash
+sudo useradd -r -s /usr/sbin/nologin fmo-audit 2>/dev/null || true
+sudo chown -R fmo-audit:fmo-audit /opt/fmo-fas
+
+sudo tee /etc/systemd/system/fmo-fas.service <<'EOF'
+[Unit]
+Description=FMO Audit Service (FAS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fmo-audit
+WorkingDirectory=/opt/fmo-fas
+Environment=EMQX_MONITOR_DB=/opt/fmo-fas/fmo-audit-service.db
+ExecStart=/opt/fmo-fas/fmo-audit-service
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now fmo-fas
+```
+
+3. 防火墙放行 9527 端口（如启用了 ufw/firewalld）。
+
+</details>
+
+### Windows（推荐一键安装）
 
 ```powershell
-irm https://bg5esn.com/share/fmo/fas-installer/install.ps1 -OutFile "$env:TEMP\fas-install.ps1"; iex (Get-Content "$env:TEMP\fas-install.ps1" -Raw -Encoding UTF8)
+powershell -ExecutionPolicy Bypass -File script\install.ps1 -Package .\fmo-audit-service-win-x64.zip
 ```
 
-安装到 `%LOCALAPPDATA%\FMOAuditService\`；或解压 zip 双击 `fmo-audit-service.exe` 直接运行。访问 `http://<服务器IP>:9527`。
+自动完成：解压到 `%LOCALAPPDATA%\FMOAuditService\` → 防火墙放行 9527 → 注册计划任务 `fmo-fas`（登录自启 + 崩溃自动重启）→ 立即启动。
+
+<details><summary>手动部署（不用脚本时展开）</summary>
+
+1. 解压 `fmo-audit-service-win-x64.zip` 到安装目录（如 `%LOCALAPPDATA%\FMOAuditService\`）
+2. 直接运行：双击 `fmo-audit-service.exe`；或注册计划任务（开机自启，管理员 PowerShell）：
+
+```powershell
+schtasks /Create /TN fmo-fas /SC ONSTART /RU SYSTEM /TR "C:\path\to\fmo-audit-service.exe" /F
+Start-ScheduledTask fmo-fas      # 立即启动；停止: Stop-ScheduledTask fmo-fas
+```
+
+3. 防火墙放行 9527 端口。
+
+</details>
 
 ### 首次配置
 
@@ -48,6 +106,7 @@ irm https://bg5esn.com/share/fmo/fas-installer/install.ps1 -OutFile "$env:TEMP\f
 2. 配置页填入 EMQX 地址（如 `http://192.168.1.100:18083`）+ API Key / Secret（EMQX Dashboard → 系统设置 → API 密钥 → 创建）
 3. 启用主题统计：填主题（默认 `FMO/RAW`），自动在 EMQX 上配置规则引擎
 4. 身份控制默认启用（最高保护）——包头与连接身份不一致的发送者会被自动拉黑
+5. 如有中继台/网关等包头呼号与连接身份本就不一致的设备，到黑名单页加入**白名单**（免于身份审计，不误封）
 
 **或命令行配置（替代步骤 2-3，适合批量部署/无浏览器环境）**：
 
@@ -84,13 +143,10 @@ fmo-audit-service --configure
 | `EMQX_MONITOR_DB` | 用户数据目录 | SQLite 数据库路径（如 `/opt/fmo-fas/fmo-audit-service.db`） |
 | `EMQX_MONITOR_TRUST_PROXY` | - | 反代场景信任 `X-Forwarded-For` 计算客户端 IP（设为 1 启用） |
 | `FAS_UPDATE_URL` | `https://bg5esn.com/share/fmo/fas.json` | OTA 更新元数据地址（自托管可覆盖） |
-| `EMQX_URL` | - | 命令行配置（--configure）用：EMQX 地址 |
-| `EMQX_API_KEY` | - | 命令行配置（--configure）用：API 密钥 Key |
-| `EMQX_API_SECRET` | - | 命令行配置（--configure）用：API 密钥 Secret |
 
 ## 数据与备份
 
-- 统计与审计数据保留 30 天自动清理；配置、管理员、黑名单留痕不清理
+- 统计与审计数据保留 30 天自动清理；配置、管理员、黑名单留痕、白名单不清理
 - 备份：`sqlite3 fmo-audit-service.db ".backup /backup/fas-$(date +%F).db"`（WAL 模式下不要直接复制文件）
 
 ## 开发者：打包发布
@@ -114,3 +170,5 @@ bash script/gen-meta.sh                  # 生成 OTA 元数据 fas.json（版�
 ## License
 
 MIT
+
+基于 [BG5ESN/fmo-audit-service](https://github.com/BG5ESN/fmo-audit-service)（MIT）修改；**白名单（免审计）功能 © BG2GZK**
