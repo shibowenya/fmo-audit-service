@@ -32,6 +32,33 @@
 </div>
 
 <div class="chart-box" style="padding-top:8px">
+  <!-- 白名单卡片 —— 白名单功能 © BG2GZK -->
+  <div class="chart-card">
+    <div class="chart-title">白名单（免于身份审计：包头呼号与连接身份不符也不会自动拉黑）</div>
+    <div class="wl-add-row" style="padding:0 12px 8px;display:flex;gap:8px;align-items:center">
+      <input class="text-input" id="wl-callsign" placeholder="呼号，如 BG2GZK" style="width:180px">
+      <input class="text-input" id="wl-note" placeholder="备注（选填，如：中继台/网关）" style="flex:1;max-width:360px">
+      <button class="btn btn-small btn-primary" id="wl-add">加入白名单</button>
+      <span id="wl-msg" style="font-size:12px"></span>
+    </div>
+    <div class="table-wrap" style="padding:0 0 12px">
+      <table id="wl-table" style="margin-top:0;min-width:640px">
+        <thead>
+          <tr>
+            <th>呼号</th>
+            <th>备注</th>
+            <th>添加人</th>
+            <th>添加时间</th>
+            <th style="width:90px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="wl-rows"></tbody>
+      </table>
+      <div id="wl-empty" class="hidden" style="padding:24px;text-align:center;color:#999;font-size:13px">白名单为空（所有连接均参与身份审计）</div>
+      <div style="padding:8px 12px;font-size:12px;color:#999">白名单功能 © BG2GZK</div>
+    </div>
+  </div>
+
   <div class="chart-card">
     <div class="chart-title">当前生效黑名单（EMQX 拒绝连接，到期自动解除）</div>
     <div class="table-wrap" style="padding:0 0 12px">

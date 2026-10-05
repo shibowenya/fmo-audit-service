@@ -79,6 +79,20 @@
   }
   function blInvalidate() { blMap = null; }
 
+  // 白名单集合（免于身份审计）—— 白名单功能 © BG2GZK，60s 缓存
+  let wlSet = null, wlSetAt = 0;
+  async function getWhitelistSet(force) {
+    const now = Date.now();
+    if (!force && wlSet && now - wlSetAt < 60000) return wlSet;
+    try {
+      const d = await api('/api/whitelist');
+      wlSet = new Set((d.rows || []).map(x => x.callsign));
+      wlSetAt = now;
+      return wlSet;
+    } catch (e) { return wlSet || new Set(); }
+  }
+  function wlInvalidate() { wlSet = null; }
+
   // 操作列 HTML：匿名客户端（无呼号）不提供拉黑
   function banCellHtml(r) {
     if (r.isAnonymous) return '<span class="ban-note">匿名</span>';
@@ -122,6 +136,7 @@
                 <input type="datetime-local" id="ban-until" class="hidden">
               </div>
             </div>
+            <div id="ban-wl-hint" class="form-msg"></div>
             <div id="ban-msg" class="form-msg"></div>
           </div>
           <div class="modal-footer">
@@ -138,6 +153,14 @@
     });
     $('ban-cancel').onclick = () => { root.innerHTML = ''; };
     mask.onclick = e => { if (e.target === mask) root.innerHTML = ''; };
+    // 白名单提示：拉黑白名单呼号不拦截，仅提示其免于身份审计（手动拉黑仍生效）—— 白名单功能 © BG2GZK
+    const updWlHint = async () => {
+      const w = (needInput ? $('ban-who').value.trim() : who).toUpperCase();
+      const set = await getWhitelistSet();
+      $('ban-wl-hint').textContent = w && set.has(w) ? 'ℹ️ 该呼号在白名单中（免于自动身份审计），手动拉黑仍会生效' : '';
+    };
+    if (needInput) $('ban-who').oninput = updWlHint;
+    updWlHint();
     $('ban-ok').onclick = async () => {
       const who2 = needInput ? $('ban-who').value.trim() : who;
       const msg2 = msg;
@@ -1001,7 +1024,61 @@
   function initBlacklist() {
     refreshStatus();
     setInterval(refreshStatus, 30000);
-    refreshAfterBl = load;
+    refreshAfterBl = () => { load(); loadWhitelist(); };
+
+    // 白名单加载与增删 —— 白名单功能 © BG2GZK
+    async function loadWhitelist() {
+      const d = await api('/api/whitelist');
+      const tbody = $('wl-rows');
+      tbody.innerHTML = '';
+      $('wl-empty').classList.toggle('hidden', d.rows.length > 0);
+      d.rows.forEach(x => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${esc(x.callsign)}</td>
+          <td class="ban-reason">${esc(x.note || '-')}</td>
+          <td>${esc(x.operator)}</td>
+          <td>${esc(x.createdAt)}</td>
+          <td><button class="btn btn-small ban-btn banned" data-wl-remove="${esc(x.callsign)}">移除</button></td>`;
+        tbody.appendChild(tr);
+      });
+      tbody.onclick = async e => {
+        const btn = e.target.closest('[data-wl-remove]');
+        if (!btn) return;
+        const cs = btn.dataset.wlRemove;
+        if (!confirm(`确认将 ${cs} 移出白名单？移除后恢复身份审计（身份不符将自动拉黑）。`)) return;
+        try {
+          const r = await api('/api/whitelist/remove', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ callsign: cs })
+          });
+          if (r.ok) { wlInvalidate(); loadWhitelist(); }
+          else alert(r.error || '移除失败');
+        } catch (e) { /* 401 已处理 */ }
+      };
+    }
+
+    $('wl-add').onclick = async () => {
+      const msg = $('wl-msg');
+      const cs = $('wl-callsign').value.trim();
+      msg.style.color = '#c62828';
+      if (!cs) { msg.textContent = '请输入呼号'; return; }
+      try {
+        const r = await api('/api/whitelist', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callsign: cs, note: $('wl-note').value.trim() })
+        });
+        if (r.ok) {
+          msg.style.color = '#2e7d32';
+          msg.textContent = r.added ? `已将 ${r.callsign} 加入白名单` : `${r.callsign} 已在白名单中`;
+          $('wl-callsign').value = ''; $('wl-note').value = '';
+          wlInvalidate();
+          loadWhitelist();
+        } else {
+          msg.textContent = r.error || '添加失败';
+        }
+      } catch (e) { /* 401 已处理 */ }
+    };
 
     async function load() {
       const d = await api('/api/blacklist/active');
@@ -1054,6 +1131,7 @@
     $('bl-add').onclick = () => openBanModal('');
 
     load();
+    loadWhitelist();
     ensureWizard();
   }
 
